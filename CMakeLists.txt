@@ -18,4 +18,4 @@ endif()
 file(GLOB SOURCES *.h *.cpp)
 
 add_executable(${PROJECT_NAME} ${SOURCES})
-
+add_library(tr.so SHARED ${SOURCES})

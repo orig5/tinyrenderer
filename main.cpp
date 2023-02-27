@@ -4,13 +4,14 @@
 
 constexpr int width  = 800; // output image size
 constexpr int height = 800;
-constexpr vec3 light_dir{1,1,1}; // light source
+constexpr vec3 light_dir{0,0,1}; // light source
 constexpr vec3       eye{1,1,3}; // camera position
 constexpr vec3    center{0,0,0}; // camera direction
 constexpr vec3        up{0,1,0}; // camera up vector
 
 extern mat<4,4> ModelView; // "OpenGL" state matrices
 extern mat<4,4> Projection;
+extern mat<4,4> Viewport;
 
 struct Shader : IShader {
     const Model &model;
@@ -34,6 +35,7 @@ struct Shader : IShader {
     virtual bool fragment(const vec3 bar, TGAColor &gl_FragColor) {
         vec3 bn = (varying_nrm*bar).normalized(); // per-vertex normal interpolation
         vec2 uv = varying_uv*bar; // tex coord interpolation
+        //auto x=uv[0];uv[1]=uv[0];uv[0]=x;
 
         // for the math refer to the tangent space normal mapping lecture
         // https://github.com/ssloy/tinyrenderer/wiki/Lesson-6bis-tangent-space-normal-mapping
@@ -47,10 +49,12 @@ struct Shader : IShader {
         vec3 r = (n*(n*uniform_l)*2 - uniform_l).normalized(); // reflected light direction, specular mapping is described here: https://github.com/ssloy/tinyrenderer/wiki/Lesson-6-Shaders-for-the-software-renderer
         double spec = std::pow(std::max(-r.z, 0.), 5+sample2D(model.specular(), uv)[0]); // specular intensity, note that the camera lies on the z-axis (in view), therefore simple -r.z
 
-        TGAColor c = sample2D(model.diffuse(), uv);
-        for (int i : {0,1,2})
-            gl_FragColor[i] = std::min<int>(10 + c[i]*(diff + spec), 255); // (a bit of ambient light, diff + spec), clamp the result
 
+        TGAColor c = sample2D(model.diffuse(), uv);
+        for (int i : {0,1,2}){
+            //gl_FragColor[i] = std::min<int>(10 + c[i]*(diff + spec), 255); // (a bit of ambient light, diff + spec), clamp the resul
+            gl_FragColor[i]=c[i];
+        }
         return false; // the pixel is not discarded
     }
 };
@@ -80,3 +84,84 @@ int main(int argc, char** argv) {
     return 0;
 }
 
+extern "C" {
+
+typedef struct {
+    TGAImage *framebuffer;
+    std::vector<double> *zbuffer;
+} Handle;
+
+Handle* init(int width,int height) {
+    Handle* hdl = new Handle;
+    hdl->framebuffer = new TGAImage(width, height, TGAImage::RGB);
+    hdl->zbuffer = new std::vector<double>(width*height, std::numeric_limits<double>::max());
+    return hdl;
+}
+
+void clear(Handle* hdl){
+    hdl->framebuffer->clear();
+    std::fill(
+            hdl->zbuffer->begin(), 
+            hdl->zbuffer->end(), std::numeric_limits<double>::max());
+}
+
+Model* get_model(char* model_name){
+    return new Model(model_name);
+}
+
+int render_model2(Handle* hdl,Model* model) {
+    Shader shader(*model);
+    for (int i=0; i<model->nfaces(); i++) { // for every triangle
+        vec4 clip_vert[3]; // triangle coordinates (clip coordinates), written by VS, read by FS
+        for (int j : {0,1,2})
+            shader.vertex(i, j, clip_vert[j]); // call the vertex shader for each triangle vertex
+        triangle(clip_vert, shader, *hdl->framebuffer, *hdl->zbuffer); // actual rasterization routine call
+    }
+    return 0;
+}
+
+
+int render_model(Handle* hdl,char* model_name) {
+    //lookat(eye, center, up);                            // build the ModelView matrix
+    //viewport(width/8, height/8, width*3/4, height*3/4); // build the Viewport matrix
+    //projection((eye-center).norm());                    // build the Projection matrix
+    
+    //std::cout << "==+== " << Projection << std::endl;
+    Model model(model_name);
+    Shader shader(model);
+    for (int i=0; i<model.nfaces(); i++) { // for every triangle
+        vec4 clip_vert[3]; // triangle coordinates (clip coordinates), written by VS, read by FS
+        for (int j : {0,1,2})
+            shader.vertex(i, j, clip_vert[j]); // call the vertex shader for each triangle vertex
+        triangle(clip_vert, shader, *hdl->framebuffer, *hdl->zbuffer); // actual rasterization routine call
+    }
+    return 0;
+}
+
+uint8_t* get_framebuf(Handle* hdl){
+    return hdl->framebuffer->get_ptr();
+}
+
+#define SET_MAT44(X,M) for(int i=0;i<4;i++) for(int j=0;j<4;j++) M[i][j]=X[i*4+j] 
+void set_model_view(double* m) {SET_MAT44(m,ModelView);}
+void set_view_port(double* m) {SET_MAT44(m,Viewport);}
+void set_projection(double* m) {SET_MAT44(m,Projection);}
+
+void render_image(int width,int height,char* model_name) {
+    TGAImage framebuffer(width, height, TGAImage::RGB); // the output image
+    lookat(eye, center, up);                            // build the ModelView matrix
+    viewport(width/8, height/8, width*3/4, height*3/4); // build the Viewport matrix
+    projection((eye-center).norm());                    // build the Projection matrix
+    std::vector<double> zbuffer(width*height, std::numeric_limits<double>::max());
+
+    Model model(model_name);
+    Shader shader(model);
+    for (int i=0; i<model.nfaces(); i++) { // for every triangle
+        vec4 clip_vert[3]; // triangle coordinates (clip coordinates), written by VS, read by FS
+        for (int j : {0,1,2})
+            shader.vertex(i, j, clip_vert[j]); // call the vertex shader for each triangle vertex
+        triangle(clip_vert, shader, framebuffer, zbuffer); // actual rasterization routine call
+    }
+    framebuffer.write_tga_file("framebuffer.tga");
+}
+}
